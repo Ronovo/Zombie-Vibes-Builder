@@ -1,0 +1,190 @@
+#:kivy 2.0.0
+
+<MainMenu>:
+    BoxLayout:
+        orientation: 'vertical'
+        padding: 20
+        spacing: 10
+
+        Label:
+            text: 'Zombie Vibe Builder v0.1'
+            font_size: '24sp'
+            size_hint_y: None
+            height: '50dp'
+
+        Button:
+            text: 'Start New Game'
+            size_hint_y: None
+            height: '50dp'
+            on_release: root.manager.current = 'character_creation'
+
+        Button:
+            text: 'Load Game'
+            size_hint_y: None
+            height: '50dp'
+            on_release: root.manager.current = 'load_game'
+
+        Button:
+            text: 'Credits'
+            size_hint_y: None
+            height: '50dp'
+            on_release: root.manager.current = 'credits'
+
+        Button:
+            text: 'Quit'
+            size_hint_y: None
+            height: '50dp'
+            on_release: app.stop()
+
+<CharacterCreationScreen>:
+    name_input: name_input
+    
+    BoxLayout:
+        orientation: 'vertical'
+        padding: 20
+        spacing: 10
+
+        Label:
+            text: 'Create Your Character'
+            font_size: '24sp'
+            size_hint_y: None
+            height: '50dp'
+
+        TextInput:
+            id: name_input
+            hint_text: 'Enter character name'
+            size_hint_y: None
+            height: '40dp'
+            multiline: False
+
+        Label:
+            text: 'Select Character Class'
+            size_hint_y: None
+            height: '30dp'
+
+        GridLayout:
+            cols: 2
+            spacing: 10
+            size_hint_y: None
+            height: '180dp'
+
+            Button:
+                text: 'Survivor'
+                on_release: root.select_preset('Survivor')
+            Button:
+                text: 'Scavenger'
+                on_release: root.select_preset('Scavenger')
+            Button:
+                text: 'Trader'
+                on_release: root.select_preset('Trader')
+            Button:
+                text: 'Fighter'
+                on_release: root.select_preset('Fighter')
+            Button:
+                text: 'Engineer'
+                on_release: root.select_preset('Engineer')
+            Button:
+                text: 'Jack of All Trades'
+                on_release: root.select_preset('Jack of All Trades')
+
+        ScrollView:
+            size_hint_y: 0.5
+            Label:
+                id: stats_display
+                text: ''
+                size_hint_y: None
+                height: self.texture_size[1]
+                text_size: self.width, None
+
+        BoxLayout:
+            size_hint_y: None
+            height: '50dp'
+            spacing: 10
+
+            Button:
+                text: 'Back'
+                on_release: root.manager.current = 'main_menu'
+
+            Button:
+                text: 'Create Character'
+                on_release: root.create_character()
+
+<GameScreen>:
+    BoxLayout:
+        orientation: 'vertical'
+        padding: 20
+        spacing: 10
+
+        Label:
+            id: status_label
+            text: ''
+            size_hint_y: None
+            height: '100dp'
+
+        Button:
+            text: 'Look for Resources'
+            size_hint_y: None
+            height: '50dp'
+            on_release: root.gather_resources()
+
+        Button:
+            text: 'Go on Adventure'
+            size_hint_y: None
+            height: '50dp'
+            on_release: root.go_adventure()
+
+        Button:
+            text: 'Build Base Upgrades'
+            size_hint_y: None
+            height: '50dp'
+            on_release: root.build_base()
+
+        Button:
+            text: 'Check Character'
+            size_hint_y: None
+            height: '50dp'
+            on_release: root.check_character()
+
+        Button:
+            text: 'Objectives'
+            size_hint_y: None
+            height: '50dp'
+            on_release: root.show_objectives()
+
+        Button:
+            text: 'Check Base Resources'
+            size_hint_y: None
+            height: '50dp'
+            on_release: root.check_resources()
+
+        Button:
+            text: 'Save and Quit to Main Menu'
+            size_hint_y: None
+            height: '50dp'
+            on_release: root.quit_to_menu()
+
+<LoadGameScreen>:
+    BoxLayout:
+        orientation: 'vertical'
+        padding: 20
+        spacing: 10
+
+        Label:
+            text: 'Load Game'
+            font_size: '24sp'
+            size_hint_y: None
+            height: '50dp'
+
+        ScrollView:
+            GridLayout:
+                id: saves_grid
+                cols: 1
+                spacing: 10
+                size_hint_y: None
+                height: self.minimum_height
+
+        Button:
+            text: 'Back to Main Menu'
+            size_hint_y: None
+            height: '50dp'
+            on_release: root.manager.current = 'main_menu'
