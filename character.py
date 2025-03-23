@@ -24,6 +24,7 @@ class Character:
         "build_shop": False,
         "go_adventure": False
     })
+    camp_members: list = field(default_factory=list)
 
     def __post_init__(self):
         self.current_ap = self.action_points
@@ -56,7 +57,8 @@ CHARACTER_PRESETS = {
         scavenging=4,   # Secondary
         charisma=2,
         combat=4,       # Secondary
-        crafting=2
+        crafting=2,
+        camp_members=[]
     ),
     "Scavenger": Character(
         name="",
@@ -64,7 +66,8 @@ CHARACTER_PRESETS = {
         scavenging=8,   # Primary
         charisma=3,
         combat=2,
-        crafting=3
+        crafting=3,
+        camp_members=[]
     ),
     "Trader": Character(
         name="",
