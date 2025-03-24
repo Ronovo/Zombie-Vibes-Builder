@@ -25,6 +25,27 @@ class Character:
         "go_adventure": False
     })
     camp_members: list = field(default_factory=list)
+    shop_inventory: Dict[str, int] = field(default_factory=lambda: {
+        "wood": 0,
+        "water": 0,
+        "food": 0,
+        "rope": 0
+    })
+    shop_prices: Dict[str, Dict[str, float]] = field(default_factory=lambda: {
+        'food': {'water': 1, 'wood': 2, 'rope': 0.5},
+        'water': {'food': 1, 'wood': 2, 'rope': 0.5},
+        'wood': {'food': 0.5, 'water': 0.5, 'rope': 0.25},
+        'rope': {'food': 2, 'water': 2, 'wood': 4}
+    })
+    money: int = 100  # Starting money
+    treasures: list = field(default_factory=list)
+    shop_treasures: list = field(default_factory=list)
+    resource_values: Dict[str, int] = field(default_factory=lambda: {
+        "wood": 5,
+        "water": 8,
+        "food": 10,
+        "rope": 15
+    })
 
     def __post_init__(self):
         self.current_ap = self.action_points

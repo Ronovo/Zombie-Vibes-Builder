@@ -18,9 +18,19 @@ from kivy.uix.gridlayout import GridLayout
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.anchorlayout import AnchorLayout
 from kivy.clock import Clock
+from kivy.graphics import Color, Rectangle
 
 # Set window size (default is usually 800x600, so 10% bigger would be 880x660)
 Window.size = (880, 660)
+
+@dataclass
+class Treasure:
+    name: str
+    category: str
+    value: int
+    location_found: str
+    description: str
+    day_found: int  # To track when it was found
 
 ADVENTURE_SCENARIOS = {
     "city": {
@@ -131,6 +141,18 @@ ADVENTURE_SCENARIOS = {
     }
 }
 
+LOCATION_TREASURES = {
+    "hospital": [
+        Treasure("Sealed Antibiotics", "Medical", 500, "Hospital", "A rare find of untouched medicine", 0),
+        # ... more treasures
+    ],
+    "mall": [
+        Treasure("Working Laptop", "Electronics", 600, "Mall", "Still has some charge!", 0),
+        # ... more treasures
+    ],
+    # ... more locations
+}
+
 FIRST_NAMES = [
     "James", "Emma", "Michael", "Sarah", "David", "Lisa", "John", "Anna", 
     "Robert", "Maria", "William", "Sofia", "Marcus", "Elena", "Thomas", "Nina",
@@ -208,6 +230,30 @@ class LoadGameScreen(Screen):
             character.current_day = data.get('current_day', 1)
             character.objectives_completed = data.get('objectives_completed', 
                 {"gather_basics": False, "build_shop": False, "go_adventure": False, "recruit_member": False, "three_members": False})
+            character.shop_inventory = data.get('shop_inventory', {"wood": 0, "water": 0, "food": 0, "rope": 0})
+            
+            # Load treasures
+            character.treasures = [
+                Treasure(
+                    name=t['name'],
+                    category=t['category'],
+                    value=t['value'],
+                    location_found=t['location_found'],
+                    description=t['description'],
+                    day_found=t['day_found']
+                ) for t in data.get('treasures', [])
+            ]
+            
+            character.shop_treasures = [
+                Treasure(
+                    name=t['name'],
+                    category=t['category'],
+                    value=t['value'],
+                    location_found=t['location_found'],
+                    description=t['description'],
+                    day_found=t['day_found']
+                ) for t in data.get('shop_treasures', [])
+            ]
             
             # Get the game screen and set the character
             game_screen = self.manager.get_screen('game_screen')
@@ -272,7 +318,7 @@ class CharacterCreationScreen(Screen):
             crafting=CHARACTER_PRESETS[self.selected_preset].crafting,
             resources={"wood": 0, "water": 0, "food": 0, "rope": 5},
             base_upgrades=[],
-            camp_members=[],  # Initialize empty camp members list
+            camp_members=[],
             current_ap=CHARACTER_PRESETS[self.selected_preset].endurance * 2,
             current_day=1,
             objectives_completed={
@@ -281,7 +327,9 @@ class CharacterCreationScreen(Screen):
                 "go_adventure": False,
                 "recruit_member": False,
                 "three_members": False
-            }
+            },
+            treasures=[],  # Initialize empty treasures list
+            shop_treasures=[]  # Initialize empty shop treasures list
         )
         
         try:
@@ -419,6 +467,7 @@ class ObjectivesPopup(Popup):
             self.show_objectives_list()
 
     def show_victory_popup(self):
+        # Create a single layout for victory content
         content = BoxLayout(orientation='vertical', padding=10, spacing=10)
         
         victory_text = (
@@ -441,12 +490,14 @@ class ObjectivesPopup(Popup):
         close_btn.bind(on_release=self.dismiss)
         content.add_widget(close_btn)
         
+        # Set popup properties with the single content layout
         self.content = content
         self.title = "Victory!"
         self.size_hint = (0.8, 0.8)
         self.auto_dismiss = False
 
     def show_objectives_list(self):
+        # Create a single layout for objectives content
         content = BoxLayout(orientation='vertical', padding=10, spacing=10)
         
         objectives_text = (
@@ -472,6 +523,7 @@ class ObjectivesPopup(Popup):
         close_btn.bind(on_release=self.dismiss)
         content.add_widget(close_btn)
         
+        # Set popup properties with the single content layout
         self.content = content
         self.title = "Current Objectives"
         self.size_hint = (0.8, 0.8)
@@ -490,7 +542,13 @@ class BaseBuildingPopup(Popup):
         self.size_hint = (0.8, 0.8)
         self.auto_dismiss = False
         
-        layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
+        self.main_layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
+        self.refresh_content()
+        self.content = self.main_layout
+
+    def refresh_content(self):
+        # Clear existing widgets
+        self.main_layout.clear_widgets()
         
         # Display current resources
         self.resources_label = Label(
@@ -498,27 +556,25 @@ class BaseBuildingPopup(Popup):
                  f"Wood: {self.character.resources['wood']}\n" +
                  f"Rope: {self.character.resources['rope']}"
         )
-        layout.add_widget(self.resources_label)
+        self.main_layout.add_widget(self.resources_label)
         
-        # Check if there's anything to build
+        # Only show build options if shop counter isn't built
         if "Shop Counter" not in self.character.base_upgrades:
-            # Shop Counter button
             shop_btn = Button(
                 text="Build Shop Counter (Costs: 10 wood, 2 rope)",
                 size_hint_y=None,
                 height='40dp'
             )
             shop_btn.bind(on_release=self.build_shop_counter)
-            layout.add_widget(shop_btn)
+            self.main_layout.add_widget(shop_btn)
         else:
-            # Nothing to build message
-            layout.add_widget(Label(
-                text="More upgrades coming soon...",
+            self.main_layout.add_widget(Label(
+                text="Future upgrades coming soon...",
                 size_hint_y=None,
                 height='40dp'
             ))
         
-        # Close button
+        # Close button with force close
         close_btn = Button(
             text="Close",
             size_hint_y=None,
@@ -527,13 +583,15 @@ class BaseBuildingPopup(Popup):
         
         def force_close(instance):
             self.dismiss()
+            # Force removal from parent if dismiss doesn't work
             if self.parent:
                 self.parent.remove_widget(self)
+            # Update the game screen
+            game_screen = App.get_running_app().root.get_screen('game_screen')
+            game_screen.update_ui()
                 
         close_btn.bind(on_release=force_close)
-        layout.add_widget(close_btn)
-        
-        self.content = layout
+        self.main_layout.add_widget(close_btn)
 
     def build_shop_counter(self, instance):
         if "Shop Counter" in self.character.base_upgrades:
@@ -546,42 +604,49 @@ class BaseBuildingPopup(Popup):
             self.character.base_upgrades.append("Shop Counter")
             self.character.objectives_completed["build_shop"] = True
             
-            # Update resources display
-            self.resources_label.text = (
-                f"Current Resources:\n" +
-                f"Wood: {self.character.resources['wood']}\n" +
-                f"Rope: {self.character.resources['rope']}"
-            )
+            # Refresh the content instead of reinitializing
+            self.refresh_content()
             
             self.show_result("Shop Counter built successfully!")
         else:
             self.show_result("You need 10 wood and 2 rope to build this...")
 
     def show_result(self, text):
-        content_layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
-        content_layout.add_widget(Label(text=text))
+        # Create a single BoxLayout as the sole content widget
+        content = BoxLayout(
+            orientation='vertical',
+            padding=10,
+            spacing=10,
+            size_hint_y=None,
+            height='100dp'
+        )
         
-        close_button = Button(
-            text='Close',
+        # Add message label to the layout
+        content.add_widget(Label(
+            text=text,
+            size_hint_y=None,
+            height='40dp'
+        ))
+        
+        # Add close button to the layout
+        close_btn = Button(
+            text="Close",
             size_hint_y=None,
             height='40dp'
         )
-        content_layout.add_widget(close_button)
+        content.add_widget(close_btn)
         
-        result_popup = Popup(
-            title='Result',
-            content=content_layout,
+        # Create popup with the BoxLayout as its only content
+        popup = Popup(
+            title="Result",
+            content=content,  # Single content widget
             size_hint=(0.6, 0.4),
             auto_dismiss=False
         )
         
-        close_button.bind(on_release=result_popup.dismiss)
-        result_popup.open()
-
-    def dismiss(self, *args):
-        game_screen = App.get_running_app().root.get_screen('game_screen')
-        game_screen.update_ui()  # Update main screen UI when closing
-        super().dismiss(*args)
+        # Bind close button
+        close_btn.bind(on_release=popup.dismiss)
+        popup.open()
 
 class ManageBasePopup(Popup):
     def __init__(self, character, **kwargs):
@@ -593,7 +658,17 @@ class ManageBasePopup(Popup):
         
         layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
         
-        # Just show the camp members management button
+        # Show shop management if counter is built
+        if "Shop Counter" in self.character.base_upgrades:
+            shop_btn = Button(
+                text="Manage Shop Counter",
+                size_hint_y=None,
+                height='40dp'
+            )
+            shop_btn.bind(on_release=self.manage_shop)
+            layout.add_widget(shop_btn)
+        
+        # Camp members management button
         members_btn = Button(
             text="Manage Survivor Jobs",
             size_hint_y=None,
@@ -608,16 +683,13 @@ class ManageBasePopup(Popup):
             size_hint_y=None,
             height='40dp'
         )
-        
-        def force_close(instance):
-            self.dismiss()
-            if self.parent:
-                self.parent.remove_widget(self)
-                
-        close_btn.bind(on_release=force_close)
+        close_btn.bind(on_release=self.dismiss)
         layout.add_widget(close_btn)
         
         self.content = layout
+
+    def manage_shop(self, instance):
+        ShopManagementPopup(self.character).open()
 
     def manage_members(self, instance):
         content = BoxLayout(orientation='vertical', padding=10, spacing=10)
@@ -721,10 +793,11 @@ class ManageBasePopup(Popup):
 
 class GuardReportPopup(Popup):
     def __init__(self, character, member_results, game_screen, **kwargs):
+        print(f"Debug: Initializing GuardReportPopup with results: {member_results}")
         super().__init__(**kwargs)
         self.character = character
-        self.member_results = member_results  # Store all results
-        self.game_screen = game_screen  # Store game screen reference
+        self.member_results = member_results
+        self.game_screen = game_screen
         self.title = "Guard Report"
         self.size_hint = (0.8, 0.8)
         self.auto_dismiss = False
@@ -865,6 +938,12 @@ class FinalDayReportPopup(Popup):
         self.title = "Day End Report"
         self.size_hint = (0.8, 0.8)
         self.auto_dismiss = False
+        self.trade_attempts = 0
+        self.trade_completed = False
+        
+        # Store visitor info as instance variables
+        self.visitor_name = f"{random.choice(FIRST_NAMES)} {random.choice(LAST_NAMES)}"
+        self.visitor_type = random.choices(VISITOR_TYPES, weights=[v['join_chance'] for v in VISITOR_TYPES])[0]
         
         layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
         
@@ -884,10 +963,6 @@ class FinalDayReportPopup(Popup):
         
         layout.add_widget(Label(text=consumption_text))
 
-        # Generate visitor
-        self.visitor_name = f"{random.choice(FIRST_NAMES)} {random.choice(LAST_NAMES)}"
-        self.visitor_type = random.choices(VISITOR_TYPES, weights=[v['join_chance'] for v in VISITOR_TYPES])[0]
-        
         visitor_text = "\n=== Visitor Arrived ===\n"
         visitor_text += f"\n{self.visitor_name} - {self.visitor_type['type']}"
         visitor_text += f"\n{self.visitor_type['description']}"
@@ -895,7 +970,7 @@ class FinalDayReportPopup(Popup):
         layout.add_widget(Label(text=visitor_text))
         
         # Visitor interaction buttons
-        self.buttons_layout = BoxLayout(
+        buttons_layout = BoxLayout(
             orientation='horizontal',
             size_hint_y=None,
             height='40dp',
@@ -905,35 +980,157 @@ class FinalDayReportPopup(Popup):
         # Recruit button
         self.recruit_btn = Button(
             text="Try to Recruit",
-            size_hint_x=0.33
+            size_hint_x=0.33  # Adjusted for 3 buttons instead of 4
         )
         self.recruit_btn.bind(on_release=lambda x: self.try_recruit())
-        self.buttons_layout.add_widget(self.recruit_btn)
+        buttons_layout.add_widget(self.recruit_btn)
         
-        # Trade button - only show if shop counter is built
-        if "Shop Counter" in self.character.base_upgrades:
-            self.trade_btn = Button(
-                text="Trade",
-                size_hint_x=0.33
-            )
-            self.trade_btn.bind(on_release=lambda x: self.trade())
-            self.buttons_layout.add_widget(self.trade_btn)
+        # Personal Trade button
+        self.personal_trade_btn = Button(
+            text="Personal Trade",
+            size_hint_x=0.33
+        )
+        self.personal_trade_btn.bind(on_release=lambda x: self.personal_trade())
+        buttons_layout.add_widget(self.personal_trade_btn)
         
         continue_btn = Button(
             text="Continue",
             size_hint_x=0.33
         )
         continue_btn.bind(on_release=self.on_continue)
-        self.buttons_layout.add_widget(continue_btn)
+        buttons_layout.add_widget(continue_btn)
         
-        layout.add_widget(self.buttons_layout)
-        
-        self.trade_attempts = 0
-        self.trade_completed = False
-        
+        layout.add_widget(buttons_layout)
         self.content = layout
 
-    def try_recruit(self):
+    def personal_trade(self):
+        if self.trade_completed:
+            self.show_result("Already completed a trade today.")
+            return
+            
+        self.trade_attempts += 1
+        if self.trade_attempts > 3:
+            self.show_result("The visitor seems annoyed and leaves...")
+            self.personal_trade_btn.disabled = True
+            return
+            
+        # Original trade options (from personal inventory)
+        trade_options = [
+            ("food", 2, "rope", 1),
+            ("water", 2, "rope", 1),
+            ("wood", 3, "rope", 1),
+            ("rope", 1, "food", 3),
+            ("rope", 1, "water", 3),
+            ("rope", 1, "wood", 4),
+            ("food", 3, "water", 4),
+            ("water", 3, "food", 4),
+            ("wood", 4, "food", 3),
+            ("wood", 4, "water", 3),
+            ("rope", 2, "wood", 6),
+            ("food", 4, "rope", 2)
+        ]
+        
+        valid_trades = [(give_resource, give_amount, get_resource, get_amount) 
+                       for give_resource, give_amount, get_resource, get_amount in trade_options 
+                       if self.character.resources[give_resource] >= give_amount]
+        
+        if not valid_trades:
+            self.show_result("No valid trades available with your current resources.")
+            return
+        
+        option = random.choice(valid_trades)
+        self.show_trade_offer(*option, is_shop_trade=False)
+
+    def show_trade_offer(self, give_resource, give_amount, get_resource, get_amount, is_shop_trade=False):
+        content = BoxLayout(orientation='vertical', padding=10, spacing=10)
+        
+        source = "shop" if is_shop_trade else "inventory"
+        content.add_widget(Label(
+            text=f"Trade Offer (from {source}):\nGive {give_amount} {give_resource} for {get_amount} {get_resource}"
+        ))
+        
+        buttons = BoxLayout(size_hint_y=None, height='40dp', spacing=10)
+        
+        accept_btn = Button(text="Accept")
+        accept_btn.bind(on_release=lambda x: self.complete_trade(
+            give_resource, give_amount, get_resource, get_amount, trade_popup, is_shop_trade
+        ))
+        
+        decline_btn = Button(text="Decline")
+        decline_btn.bind(on_release=lambda x: trade_popup.dismiss())
+        
+        buttons.add_widget(accept_btn)
+        buttons.add_widget(decline_btn)
+        content.add_widget(buttons)
+        
+        trade_popup = Popup(
+            title="Trade Offer",
+            content=content,
+            size_hint=(0.8, 0.4),
+            auto_dismiss=False
+        )
+        trade_popup.open()
+
+    def complete_trade(self, give_resource, give_amount, get_resource, get_amount, trade_popup, is_shop_trade=False):
+        if is_shop_trade:
+            self.character.shop_inventory[give_resource] -= give_amount
+            self.character.resources[get_resource] += get_amount
+        else:
+            self.character.resources[give_resource] -= give_amount
+            self.character.resources[get_resource] += get_amount
+            
+        self.trade_completed = True
+        self.personal_trade_btn.disabled = True
+        
+        self.show_result("Trade completed successfully!")
+        trade_popup.dismiss()
+
+    def on_continue(self, instance):
+        self.character.current_day += 1
+        self.character.current_ap = self.character.action_points
+        
+        # Save game at the start of each new day
+        save_character(self.character)
+        
+        self.dismiss()
+        Clock.schedule_once(lambda dt: self.game_screen.update_ui(), 0.1)
+
+    def show_result(self, text):
+        # Create a single BoxLayout to hold all content
+        content_layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
+        
+        # Add the message label
+        message_label = Label(text=text)
+        content_layout.add_widget(message_label)
+        
+        # Add the close button
+        close_btn = Button(
+            text="Close",
+            size_hint_y=None,
+            height='40dp'
+        )
+        content_layout.add_widget(close_btn)
+        
+        # Create the popup with the layout as its single content widget
+        result_popup = Popup(
+            title="Result",
+            content=content_layout,  # Use the layout as the single content widget
+            size_hint=(0.6, 0.4),
+            auto_dismiss=False
+        )
+        
+        # Bind the close button
+        close_btn.bind(on_release=result_popup.dismiss)
+        
+        # Open the popup
+        result_popup.open()
+
+    def dismiss(self, *args):
+        game_screen = App.get_running_app().root.get_screen('game_screen')
+        game_screen.update_ui()  # Update main screen UI when closing
+        super().dismiss(*args)
+
+    def try_recruit(self):  # Remove parameters since we're using instance variables
         # Calculate resource bonus (scales with total resources)
         resource_bonus = sum(self.character.resources.values()) * 0.01  # 1% per resource unit
         resource_bonus = min(resource_bonus, 0.3)  # Cap at 30% bonus
@@ -967,120 +1164,6 @@ class FinalDayReportPopup(Popup):
         self.recruit_btn.disabled = True
         self.recruit_btn.text = "Already Attempted"
 
-    def trade(self):
-        if self.trade_completed:
-            self.show_result("Trade already completed for today.")
-            return
-            
-        self.trade_attempts += 1
-        if self.trade_attempts > 3:
-            self.show_result("The visitor seems annoyed and leaves...")
-            if hasattr(self, 'trade_btn'):
-                self.trade_btn.disabled = True
-            return
-            
-        valid_trades = self.get_valid_trades()
-        if not valid_trades:
-            self.show_result("No valid trades available with your current resources.")
-            return
-        
-        option = random.choice(valid_trades)
-        self.show_trade_offer(*option)
-
-    def get_valid_trades(self):
-        valid_trades = [
-            ("food", 2, "rope", 1),
-            ("water", 2, "rope", 1),
-            ("wood", 3, "rope", 1),
-            ("rope", 1, "food", 3),
-            ("rope", 1, "water", 3),
-            ("rope", 1, "wood", 4),
-            # New trade options
-            ("food", 3, "water", 4),
-            ("water", 3, "food", 4),
-            ("wood", 4, "food", 3),
-            ("wood", 4, "water", 3),
-            ("rope", 2, "wood", 6),
-            ("food", 4, "rope", 2)
-        ]
-        
-        return [(give_resource, give_amount, get_resource, get_amount) 
-                for give_resource, give_amount, get_resource, get_amount in valid_trades 
-                if self.character.resources[give_resource] >= give_amount]
-
-    def show_trade_offer(self, give_resource, give_amount, get_resource, get_amount):
-        content = BoxLayout(orientation='vertical', padding=10, spacing=10)
-        content.add_widget(Label(
-            text=f"Trade Offer:\nGive {give_amount} {give_resource} for {get_amount} {get_resource}"
-        ))
-        
-        buttons = BoxLayout(size_hint_y=None, height='40dp', spacing=10)
-        
-        accept_btn = Button(text="Accept")
-        accept_btn.bind(on_release=lambda x: self.complete_trade(
-            give_resource, give_amount, get_resource, get_amount, trade_popup
-        ))
-        
-        decline_btn = Button(text="Decline")
-        decline_btn.bind(on_release=lambda x: trade_popup.dismiss())
-        
-        buttons.add_widget(accept_btn)
-        buttons.add_widget(decline_btn)
-        content.add_widget(buttons)
-        
-        trade_popup = Popup(
-            title="Trade Offer",
-            content=content,
-            size_hint=(0.8, 0.4),
-            auto_dismiss=False
-        )
-        trade_popup.open()
-
-    def complete_trade(self, give_resource, give_amount, get_resource, get_amount, trade_popup):
-        self.character.resources[give_resource] -= give_amount
-        self.character.resources[get_resource] += get_amount
-        self.trade_completed = True
-        if hasattr(self, 'trade_btn'):
-            self.trade_btn.disabled = True
-        self.show_result("Trade completed successfully!")
-        trade_popup.dismiss()
-
-    def show_result(self, text):
-        content = BoxLayout(orientation='vertical', padding=10, spacing=10)
-        content.add_widget(Label(text=text))
-        
-        close_btn = Button(
-            text="Close",
-            size_hint_y=None,
-            height='40dp'
-        )
-        content.add_widget(close_btn)
-        
-        result_popup = Popup(
-            title="Result",
-            content=content,
-            size_hint=(0.6, 0.4),
-            auto_dismiss=False
-        )
-        
-        close_btn.bind(on_release=result_popup.dismiss)
-        result_popup.open()
-
-    def on_continue(self, instance):
-        self.character.current_day += 1
-        self.character.current_ap = self.character.action_points
-        
-        # Save game at the start of each new day
-        save_character(self.character)
-        
-        self.dismiss()
-        Clock.schedule_once(lambda dt: self.game_screen.update_ui(), 0.1)
-
-    def dismiss(self, *args):
-        game_screen = App.get_running_app().root.get_screen('game_screen')
-        game_screen.update_ui()  # Update main screen UI when closing
-        super().dismiss(*args)
-
 class AdventureResultPopup(Popup):
     def __init__(self, text, **kwargs):
         super().__init__(**kwargs)
@@ -1088,9 +1171,13 @@ class AdventureResultPopup(Popup):
         self.size_hint = (0.8, 0.8)
         self.auto_dismiss = False
         
+        # Create a single layout for all content
         layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
+        
+        # Add the result text
         layout.add_widget(Label(text=text))
         
+        # Add close button
         close_btn = Button(
             text="Close",
             size_hint_y=None,
@@ -1105,6 +1192,7 @@ class AdventureResultPopup(Popup):
         close_btn.bind(on_release=force_close)
         layout.add_widget(close_btn)
         
+        # Set the layout as the single content widget
         self.content = layout
 
 class LocationSelectionPopup(Popup):
@@ -1116,8 +1204,18 @@ class LocationSelectionPopup(Popup):
         self.size_hint = (0.8, 0.8)
         self.auto_dismiss = False
         
-        layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
+        # Create a single main layout
+        self.main_layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
         
+        # Store AP label as instance variable
+        self.ap_label = Label(
+            text=self.get_ap_text(),
+            size_hint_y=None,
+            height='40dp'
+        )
+        self.main_layout.add_widget(self.ap_label)
+        
+        # Add location buttons
         locations = {
             'city': ['Abandoned Mall', 'Hospital', 'Residential District'],
             'woods': ['River Expedition', 'Ranger Station', 'Abandoned Campgrounds']
@@ -1132,23 +1230,25 @@ class LocationSelectionPopup(Popup):
             btn.location = location
             btn.location_type = location_type
             btn.bind(on_release=self.start_adventure)
-            layout.add_widget(btn)
+            self.main_layout.add_widget(btn)
         
+        # Add close button
         close_btn = Button(
             text="Back",
             size_hint_y=None,
             height='40dp'
         )
+        close_btn.bind(on_release=self.dismiss)
+        self.main_layout.add_widget(close_btn)
         
-        def force_close(instance):
-            self.dismiss()
-            if self.parent:
-                self.parent.remove_widget(self)
-                
-        close_btn.bind(on_release=force_close)
-        layout.add_widget(close_btn)
-        
-        self.content = layout
+        # Set the main layout as the single content widget
+        self.content = self.main_layout
+
+    def get_ap_text(self):
+        return f"Action Points: {self.character.current_ap}\nAdventure will cost: 2 AP"
+
+    def update_ap_display(self):
+        self.ap_label.text = self.get_ap_text()
 
     def start_adventure(self, instance):
         if self.character.current_ap < 2:
@@ -1158,40 +1258,366 @@ class LocationSelectionPopup(Popup):
             result = self.determine_outcome(instance.location_type, instance.location)
             self.character.objectives_completed["go_adventure"] = True
             
-            # Update both the game screen and adventure menu AP displays
+            # Update displays
+            self.update_ap_display()
+            if self.parent_popup:
+                self.parent_popup.update_status()
+            
+            # Update game screen and check for random trader
             game_screen = App.get_running_app().root.get_screen('game_screen')
-            game_screen.update_status()
-            self.parent_popup.update_status()
+            game_screen.update_ui()
+            game_screen.check_random_trader()
         
         result_popup = AdventureResultPopup(text=result)
-        result_popup.bind(on_dismiss=lambda x: self.parent_popup.update_status())
+        result_popup.bind(on_dismiss=self.on_result_dismiss)
         result_popup.open()
+
+    def on_result_dismiss(self, instance):
+        """Handle result popup dismissal without recursion"""
+        if self.character.current_ap <= 0:
+            # Dismiss this popup first
+            self.dismiss()
+            # Then the parent popup if it exists
+            if self.parent_popup:
+                self.parent_popup.dismiss()
+            # Finally, trigger the day end sequence directly
+            Clock.schedule_once(lambda dt: App.get_running_app().root.get_screen('game_screen').check_ap_and_day(), 0.1)
+
+    def check_ap(self):
+        if self.character.current_ap <= 0:
+            self.dismiss()
+            self.parent_popup.dismiss()
+            game_screen = App.get_running_app().root.get_screen('game_screen')
+            game_screen.check_ap_and_day()
 
     def determine_outcome(self, location_type, location):
         base_chance = random.random()
         
-        # Adjust chance based on relevant stats
+        # Calculate skill bonus based on location type
         if location_type == 'city':
-            bonus = (self.character.scavenging * 0.02) + (self.character.charisma * 0.01)
+            skill_bonus = (self.character.scavenging * 0.02) + (self.character.charisma * 0.01)
         else:  # woods
-            bonus = (self.character.endurance * 0.02) + (self.character.combat * 0.01)
+            skill_bonus = (self.character.endurance * 0.02) + (self.character.combat * 0.01)
         
-        final_chance = base_chance + bonus
-        
-        # Get the appropriate outcome
-        if final_chance > 0.8:  # Good outcome (20% + bonuses)
-            outcome = ADVENTURE_SCENARIOS[location_type][location.lower().replace(' ', '_')]['good']
-        elif final_chance > 0.3:  # Neutral outcome (50%)
-            outcome = ADVENTURE_SCENARIOS[location_type][location.lower().replace(' ', '_')]['neutral']
-        else:  # Bad outcome (30%)
-            outcome = ADVENTURE_SCENARIOS[location_type][location.lower().replace(' ', '_')]['bad']
+        # Exceptional roll (increased to 20% for testing)
+        exceptional_chance = 0.20 + (self.character.scavenging * 0.01)
+        if base_chance < exceptional_chance:
+            # Found a treasure!
+            if location_type == 'city':
+                if location == 'Hospital':
+                    treasure = Treasure(
+                        "Sealed Antibiotics", "Medical", 500,
+                        "Hospital", "A rare find of untouched medicine",
+                        self.character.current_day
+                    )
+                elif location == 'Abandoned Mall':
+                    treasure = Treasure(
+                        "Working Laptop", "Electronics", 600,
+                        "Mall", "Still has some charge!",
+                        self.character.current_day
+                    )
+                else:  # Residential District
+                    treasure = Treasure(
+                        "Fine Jewelry", "Luxury", 400,
+                        "House", "Someone's precious memories...",
+                        self.character.current_day
+                    )
+            else:  # woods locations
+                if location == 'Ranger Station':
+                    treasure = Treasure(
+                        "Military GPS", "Electronics", 450,
+                        "Ranger Station", "Still works perfectly!",
+                        self.character.current_day
+                    )
+                elif location == 'River Expedition':
+                    treasure = Treasure(
+                        "Gold Nuggets", "Valuables", 700,
+                        "River", "Nature's treasure!",
+                        self.character.current_day
+                    )
+                else:  # Abandoned Campgrounds
+                    treasure = Treasure(
+                        "Vintage Camping Gear", "Equipment", 350,
+                        "Campgrounds", "They don't make them like this anymore",
+                        self.character.current_day
+                    )
             
-        return random.choice(outcome)
+            if not hasattr(self.character, 'treasures'):
+                self.character.treasures = []
+            self.character.treasures.append(treasure)
+            return f"EXCEPTIONAL FIND! You discovered {treasure.name}! ({treasure.description})"
 
-    def dismiss(self, *args):
-        game_screen = App.get_running_app().root.get_screen('game_screen')
-        game_screen.update_ui()  # Update main screen UI when closing
-        super().dismiss(*args)
+        # Regular outcome rolls
+        final_chance = base_chance + skill_bonus
+        if final_chance > 0.8:  # Good outcome (20%)
+            outcome = random.choice([
+                self.generate_resource_find('good'),
+                self.generate_friendly_encounter(),
+                self.generate_resource_find('good')  # Higher chance for resources
+            ])
+        elif final_chance > 0.3:  # Neutral outcome (50%)
+            outcome = random.choice([
+                self.generate_resource_find('neutral'),
+                "You find nothing of value, but stay safe.",
+                "The area is quiet, allowing for a thorough search."
+            ])
+        else:  # Bad outcome (30%)
+            outcome = random.choice([
+                self.generate_zombie_encounter(),
+                self.generate_bandit_encounter(),
+                self.generate_accident()
+            ])
+        
+        return outcome
+
+    def generate_resource_find(self, quality):
+        resource = random.choice(['wood', 'water', 'food', 'rope'])
+        if quality == 'good':
+            amount = random.randint(3, 5)
+        else:  # neutral
+            amount = random.randint(1, 2)
+        
+        self.character.resources[resource] += amount
+        return f"You found {amount} {resource}!"
+
+    def generate_friendly_encounter(self):
+        visitor_name = f"{random.choice(FIRST_NAMES)} {random.choice(LAST_NAMES)}"
+        visitor_type = random.choices(VISITOR_TYPES, weights=[v['join_chance'] for v in VISITOR_TYPES])[0]
+        
+        # Store visitor info for potential recruitment
+        self.current_visitor = {
+            'name': visitor_name,
+            'type': visitor_type['type'],
+            'description': visitor_type['description'],
+            'ap': visitor_type['ap']
+        }
+        
+        # Schedule the visitor interaction popup
+        Clock.schedule_once(lambda dt: self.show_visitor_popup(), 0.1)
+        
+        return f"You meet {visitor_name}, a {visitor_type['type']}..."
+
+    def generate_zombie_encounter(self):
+        # Lose some resources running away
+        resource = random.choice(['food', 'water', 'wood', 'rope'])
+        amount = random.randint(1, 2)
+        if self.character.resources[resource] >= amount:
+            self.character.resources[resource] -= amount
+            return f"Zombies force you to drop {amount} {resource} while escaping!"
+        else:
+            self.character.current_ap = max(0, self.character.current_ap - 1)
+            return "Zombies appear! You escape, but lose 1 AP from exhaustion!"
+
+    def generate_bandit_encounter(self):
+        # Bandits steal resources
+        resource = random.choice(['food', 'water', 'wood', 'rope'])
+        amount = random.randint(2, 3)
+        if self.character.resources[resource] >= amount:
+            self.character.resources[resource] -= amount
+            return f"Bandits rob you of {amount} {resource}!"
+        else:
+            self.character.resources[resource] = 0
+            return f"Bandits take all your {resource}!"
+
+    def generate_accident(self):
+        # Random accident that costs AP
+        self.character.current_ap = max(0, self.character.current_ap - 1)
+        return random.choice([
+            "You twist your ankle! (-1 AP)",
+            "You get lost and waste time! (-1 AP)",
+            "The weather turns bad! (-1 AP)"
+        ])
+
+    def show_visitor_popup(self):
+        if not hasattr(self, 'current_visitor'):
+            return
+        
+        content = BoxLayout(orientation='vertical', padding=10, spacing=10)
+        content.add_widget(Label(
+            text=f"You've met {self.current_visitor['name']}\n"
+                 f"Type: {self.current_visitor['type']}"
+        ))
+        
+        buttons = BoxLayout(size_hint_y=None, height='40dp', spacing=10)
+        
+        recruit_btn = Button(text="Try to Recruit")
+        recruit_btn.bind(on_release=lambda x: self.try_recruit_visitor(visitor_popup))
+        
+        trade_btn = Button(text="Trade")
+        trade_btn.bind(on_release=lambda x: self.try_trade_visitor(visitor_popup))
+        
+        ignore_btn = Button(text="Ignore")
+        ignore_btn.bind(on_release=lambda x: visitor_popup.dismiss())
+        
+        buttons.add_widget(recruit_btn)
+        buttons.add_widget(trade_btn)
+        buttons.add_widget(ignore_btn)
+        content.add_widget(buttons)
+        
+        visitor_popup = Popup(
+            title="New Encounter!",
+            content=content,
+            size_hint=(0.8, 0.4),
+            auto_dismiss=False
+        )
+        visitor_popup.open()
+
+    def try_recruit_visitor(self, popup):
+        if not hasattr(self, 'current_visitor'):
+            return
+        
+        # Use same recruitment logic as before
+        resource_bonus = sum(self.character.resources.values()) * 0.01
+        resource_bonus = min(resource_bonus, 0.3)
+        
+        join_chance = 0.3 + (self.character.charisma * 0.05) + resource_bonus
+        
+        if random.random() < join_chance:
+            self.character.camp_members.append({
+                'name': self.current_visitor['name'],
+                'type': self.current_visitor['type'],
+                'mode': 'gather',  # Default mode
+                'ap': self.current_visitor['ap']
+            })
+            result = f"{self.current_visitor['name']} has joined your camp!"
+            
+            if len(self.character.camp_members) == 1:
+                self.character.objectives_completed['recruit_member'] = True
+            if len(self.character.camp_members) >= 3:
+                self.character.objectives_completed['three_members'] = True
+        else:
+            result = f"{self.current_visitor['name']} declined to join..."
+        
+        popup.dismiss()
+        self.show_result(result)
+
+    def try_trade_visitor(self, popup):
+        if not hasattr(self, 'current_visitor'):
+            return
+            
+        trade_options = [
+            ("food", 2, "rope", 1),
+            ("water", 2, "rope", 1),
+            ("wood", 3, "rope", 1),
+            ("rope", 1, "food", 3),
+            ("rope", 1, "water", 3),
+            ("rope", 1, "wood", 4)
+        ]
+        
+        valid_trades = [(give_resource, give_amount, get_resource, get_amount) 
+                        for give_resource, give_amount, get_resource, get_amount in trade_options 
+                        if self.character.resources[give_resource] >= give_amount]
+        
+        if not valid_trades:
+            popup.dismiss()
+            self.show_result("You don't have enough resources to trade.")
+            return
+        
+        option = random.choice(valid_trades)
+        popup.dismiss()
+        self.show_trade_offer(*option)
+
+    def show_trade_offer(self, give_resource, give_amount, get_resource, get_amount):
+        # Create a single main layout for all content
+        main_layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
+        
+        # Add the trade offer text
+        main_layout.add_widget(Label(
+            text=f"{self.current_visitor['name']} wants to buy {give_amount} {give_resource} for {get_amount} {get_resource}"
+        ))
+        
+        # Create a buttons layout
+        buttons_layout = BoxLayout(
+            orientation='horizontal',
+            size_hint_y=None,
+            height='40dp',
+            spacing=10
+        )
+        
+        # Create and add buttons
+        accept_btn = Button(text="Accept")
+        accept_btn.bind(on_release=lambda x: self.complete_random_trade(
+            give_resource, give_amount, get_resource, get_amount, trade_popup
+        ))
+        
+        bargain_btn = Button(text="Bargain")
+        bargain_btn.bind(on_release=lambda x: self.attempt_bargain(
+            give_resource, give_amount, get_resource, get_amount, trade_popup
+        ))
+        
+        decline_btn = Button(text="Decline")
+        decline_btn.bind(on_release=lambda x: trade_popup.dismiss())
+        
+        # Add buttons to the button layout
+        buttons_layout.add_widget(accept_btn)
+        buttons_layout.add_widget(bargain_btn)
+        buttons_layout.add_widget(decline_btn)
+        
+        # Add the buttons layout to the main layout
+        main_layout.add_widget(buttons_layout)
+        
+        # Create the popup with the main layout as its single content
+        trade_popup = Popup(
+            title="Trade Offer",
+            content=main_layout,
+            size_hint=(0.8, 0.4),
+            auto_dismiss=False
+        )
+        
+        trade_popup.open()
+
+    def attempt_bargain(self, sell_resource, sell_amount, pay_resource, pay_amount, popup):
+        # Base 30% chance + 5% per charisma point
+        success_chance = 0.3 + (self.character.charisma * 0.05)
+        
+        if random.random() < success_chance:
+            # Increase offer by 20-40%
+            increase = random.uniform(0.2, 0.4)
+            new_amount = int(pay_amount * (1 + increase))
+            self.show_result(
+                f"{self.current_visitor['name']} agrees to increase their offer to {new_amount} {pay_resource}!"
+            )
+            # Show new trade offer
+            self.show_trade_offer(self.current_visitor['name'], sell_resource, sell_amount, pay_resource, new_amount)
+        else:
+            self.show_result(f"{self.current_visitor['name']} becomes annoyed and leaves...")
+        popup.dismiss()
+
+    def complete_random_trade(self, sell_resource, sell_amount, pay_resource, pay_amount, popup):
+        self.character.resources[sell_resource] -= sell_amount
+        self.character.resources[pay_resource] += pay_amount
+        popup.dismiss()
+        self.show_result(f"Trade completed! Received {pay_amount} {pay_resource}")
+
+    def show_result(self, text):
+        # Create a single BoxLayout to hold all content
+        content_layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
+        
+        # Add the message label
+        message_label = Label(text=text)
+        content_layout.add_widget(message_label)
+        
+        # Add the close button
+        close_btn = Button(
+            text="Close",
+            size_hint_y=None,
+            height='40dp'
+        )
+        content_layout.add_widget(close_btn)
+        
+        # Create the popup with the layout as its single content widget
+        result_popup = Popup(
+            title="Result",
+            content=content_layout,  # Use the layout as the single content widget
+            size_hint=(0.6, 0.4),
+            auto_dismiss=False
+        )
+        
+        # Bind the close button
+        close_btn.bind(on_release=result_popup.dismiss)
+        
+        # Open the popup
+        result_popup.open()
 
 class AdventurePopup(Popup):
     def __init__(self, character, **kwargs):
@@ -1286,10 +1712,15 @@ class GameScreen(Screen):
 
     def check_ap_and_day(self):
         if self.character and self.character.current_ap <= 0:
-            # Process member activities
-            member_results = self.process_member_activities()
-            # Start the sequence of popups with the results
-            GuardReportPopup(self.character, member_results, self).open()
+            print(f"Debug: Triggering day end with AP: {self.character.current_ap}")
+            # Schedule the day end sequence after a short delay to allow popups to close
+            Clock.schedule_once(lambda dt: self.show_day_end_sequence(), 0.1)
+
+    def show_day_end_sequence(self):
+        """Show the day end sequence without recursion"""
+        member_results = self.process_member_activities()
+        print(f"Debug: Member results: {member_results}")
+        GuardReportPopup(self.character, member_results, self).open()
 
     def process_member_activities(self):
         results = {
@@ -1346,7 +1777,8 @@ class GameScreen(Screen):
         gathering_popup.bind(
             on_dismiss=lambda x: (
                 self.update_status(),
-                self.check_ap_and_day()
+                self.check_ap_and_day(),
+                self.check_random_trader()
             )
         )
         gathering_popup.open()
@@ -1356,7 +1788,12 @@ class GameScreen(Screen):
             return
         
         adventure_popup = AdventurePopup(self.character)
-        adventure_popup.bind(on_dismiss=lambda x: self.update_status())
+        adventure_popup.bind(
+            on_dismiss=lambda x: (
+                self.update_status(),
+                self.check_random_trader()
+            )
+        )
         adventure_popup.open()
 
     def build_base(self):
@@ -1423,6 +1860,432 @@ class GameScreen(Screen):
         else:
             self.manager.current = 'main_menu'
 
+    def check_random_trader(self):
+        if random.random() < 0.3:  # 30% chance for trader
+            if random.random() < 0.4:  # 40% chance to sell treasure instead of buy
+                self.show_treasure_sale_offer()
+            else:
+                # Existing shop trade logic
+                if "Shop Counter" in self.character.base_upgrades:
+                    if any(self.character.shop_inventory.values()):
+                        self.show_random_trade_popup()
+                    else:
+                        self.show_result("Someone visited but there was nothing to trade...they have left.")
+
+    def show_treasure_sale_offer(self):
+        visitor_name = f"{random.choice(FIRST_NAMES)} {random.choice(LAST_NAMES)}"
+        
+        # Generate a random treasure
+        treasure_types = [
+            ("Ancient Coin Collection", "Collectible", random.randint(100, 300)),
+            ("Medical Supplies", "Medical", random.randint(200, 400)),
+            ("Preserved Food Cache", "Supplies", random.randint(150, 250)),
+            ("Rare Book", "Collectible", random.randint(50, 150)),
+            ("Tool Set", "Equipment", random.randint(100, 200))
+        ]
+        
+        treasure_name, category, value = random.choice(treasure_types)
+        asking_price = int(value * random.uniform(0.8, 1.2))  # Vary the asking price
+        
+        content = BoxLayout(orientation='vertical', padding=10, spacing=10)
+        content.add_widget(Label(
+            text=f"{visitor_name} offers to sell you {treasure_name}\n"
+                 f"Category: {category}\n"
+                 f"Asking Price: {asking_price} credits"
+        ))
+        
+        buttons = BoxLayout(size_hint_y=None, height='40dp', spacing=10)
+        
+        def buy_treasure(popup):
+            if self.character.money >= asking_price:
+                self.character.money -= asking_price
+                new_treasure = Treasure(
+                    treasure_name, category, value,
+                    "Purchased", f"Bought from {visitor_name}",
+                    self.character.current_day
+                )
+                self.character.treasures.append(new_treasure)
+                self.show_result(f"You purchased {treasure_name}!")
+            else:
+                self.show_result("Not enough credits!")
+            popup.dismiss()
+        
+        buy_btn = Button(text="Buy")
+        buy_btn.bind(on_release=lambda x: buy_treasure(trade_popup))
+        
+        decline_btn = Button(text="Decline")
+        decline_btn.bind(on_release=lambda x: trade_popup.dismiss())
+        
+        buttons.add_widget(buy_btn)
+        buttons.add_widget(decline_btn)
+        content.add_widget(buttons)
+        
+        trade_popup = Popup(
+            title="Treasure For Sale",
+            content=content,
+            size_hint=(0.8, 0.4),
+            auto_dismiss=False
+        )
+        trade_popup.open()
+
+    def show_random_trade_popup(self):
+        visitor_name = f"{random.choice(FIRST_NAMES)} {random.choice(LAST_NAMES)}"
+        
+        # Generate trade offer
+        valid_trades = self.get_valid_shop_trades()
+        if not valid_trades:
+            self.show_result("Someone visited but there was nothing to trade...they have left.")
+            return
+            
+        trade_offer = random.choice(valid_trades)
+        
+        if trade_offer[0] == 'treasure':
+            # Handle treasure trade
+            _, treasure, pay_resource, initial_offer = trade_offer
+            self.show_treasure_trade_offer(visitor_name, treasure, pay_resource, initial_offer)
+        else:
+            # Handle regular resource trade
+            sell_resource, sell_amount, pay_resource, pay_amount = trade_offer
+            self.show_regular_trade_offer(visitor_name, sell_resource, sell_amount, pay_resource, pay_amount)
+
+    def show_treasure_trade_offer(self, visitor_name, treasure, pay_resource, initial_offer):
+        self.current_bargain_attempts = 0
+        self.max_bargain_attempts = 3
+        self.current_treasure = treasure
+        self.current_pay_resource = pay_resource
+        self.initial_offer = initial_offer
+        self.current_offer = initial_offer
+        
+        content = BoxLayout(orientation='vertical', padding=10, spacing=10)
+        
+        # Visitor's interest text
+        interest_text = (
+            f"{visitor_name} is interested in your {treasure.name}!\n"
+            f"Value: {treasure.value} credits\n"
+            f"They offer {initial_offer} {pay_resource} (worth {initial_offer * self.character.resource_values[pay_resource]} credits)"
+        )
+        content.add_widget(Label(text=interest_text))
+        
+        # Payment options
+        payment_layout = BoxLayout(orientation='vertical', spacing=5)
+        
+        # Option 1: Full resource payment
+        option1_btn = Button(
+            text=f"Accept {initial_offer} {pay_resource}",
+            size_hint_y=None,
+            height='40dp'
+        )
+        option1_btn.bind(on_release=lambda x: self.complete_treasure_trade(
+            [(pay_resource, initial_offer, initial_offer * self.character.resource_values[pay_resource])],
+            0, trade_popup
+        ))
+        payment_layout.add_widget(option1_btn)
+        
+        # Option 2: Full credits payment
+        option2_btn = Button(
+            text=f"Accept {treasure.value} credits",
+            size_hint_y=None,
+            height='40dp'
+        )
+        option2_btn.bind(on_release=lambda x: self.complete_treasure_trade(
+            [], treasure.value, trade_popup
+        ))
+        payment_layout.add_widget(option2_btn)
+        
+        # Option 3: Mixed payment (half resources, half credits)
+        half_resource_amount = initial_offer // 2
+        half_credit_amount = treasure.value // 2
+        if half_resource_amount > 0:
+            option3_btn = Button(
+                text=f"Accept {half_resource_amount} {pay_resource} + {half_credit_amount} credits",
+                size_hint_y=None,
+                height='40dp'
+            )
+            option3_btn.bind(on_release=lambda x: self.complete_treasure_trade(
+                [(pay_resource, half_resource_amount, half_resource_amount * self.character.resource_values[pay_resource])],
+                half_credit_amount, trade_popup
+            ))
+            payment_layout.add_widget(option3_btn)
+        
+        content.add_widget(payment_layout)
+        
+        # Bargaining button
+        bargain_btn = Button(
+            text=f"Bargain ({self.max_bargain_attempts} attempts left)",
+            size_hint_y=None,
+            height='40dp'
+        )
+        bargain_btn.bind(on_release=lambda x: self.attempt_treasure_bargain(
+            bargain_btn, payment_layout, trade_popup
+        ))
+        content.add_widget(bargain_btn)
+        
+        # Decline button
+        decline_btn = Button(
+            text="Decline",
+            size_hint_y=None,
+            height='40dp'
+        )
+        decline_btn.bind(on_release=lambda x: trade_popup.dismiss())
+        content.add_widget(decline_btn)
+        
+        trade_popup = Popup(
+            title="Treasure Trade Offer",
+            content=content,
+            size_hint=(0.8, 0.6),
+            auto_dismiss=False
+        )
+        trade_popup.open()
+
+    def attempt_treasure_bargain(self, bargain_btn, payment_layout, popup):
+        self.current_bargain_attempts += 1
+        
+        # Calculate bargaining success chance based on charisma
+        success_chance = 0.3 + (self.character.charisma * 0.05)  # 30% base + 5% per charisma
+        
+        if random.random() < success_chance:
+            # Successful bargain increases offer by 10-20%
+            increase = random.uniform(0.1, 0.2)
+            self.current_offer = int(self.current_offer * (1 + increase))
+            
+            # Update payment options
+            payment_layout.clear_widgets()
+            
+            # Option 1: Full resource payment
+            option1_btn = Button(
+                text=f"Accept {self.current_offer} {self.current_pay_resource}",
+                size_hint_y=None,
+                height='40dp'
+            )
+            option1_btn.bind(on_release=lambda x: self.complete_treasure_trade(
+                [(self.current_pay_resource, self.current_offer, self.current_offer * self.character.resource_values[self.current_pay_resource])],
+                0, popup
+            ))
+            payment_layout.add_widget(option1_btn)
+            
+            # Option 2: Full credits payment
+            option2_btn = Button(
+                text=f"Accept {self.current_treasure.value} credits",
+                size_hint_y=None,
+                height='40dp'
+            )
+            option2_btn.bind(on_release=lambda x: self.complete_treasure_trade(
+                [], self.current_treasure.value, popup
+            ))
+            payment_layout.add_widget(option2_btn)
+            
+            # Option 3: Mixed payment
+            half_resource_amount = self.current_offer // 2
+            half_credit_amount = self.current_treasure.value // 2
+            if half_resource_amount > 0:
+                option3_btn = Button(
+                    text=f"Accept {half_resource_amount} {self.current_pay_resource} + {half_credit_amount} credits",
+                    size_hint_y=None,
+                    height='40dp'
+                )
+                option3_btn.bind(on_release=lambda x: self.complete_treasure_trade(
+                    [(self.current_pay_resource, half_resource_amount, half_resource_amount * self.character.resource_values[self.current_pay_resource])],
+                    half_credit_amount, popup
+                ))
+                payment_layout.add_widget(option3_btn)
+            
+            self.show_result("They agree to increase their offer!")
+        else:
+            self.show_result("They refuse to increase their offer...")
+        
+        # Update or disable bargain button
+        remaining_attempts = self.max_bargain_attempts - self.current_bargain_attempts
+        if remaining_attempts > 0:
+            bargain_btn.text = f"Bargain ({remaining_attempts} attempts left)"
+        else:
+            bargain_btn.disabled = True
+            bargain_btn.text = "No more bargaining"
+            
+        # Chance for trader to leave if pushed too hard
+        if self.current_bargain_attempts >= 2 and random.random() < 0.3:
+            self.show_result("The trader becomes annoyed and leaves...")
+            popup.dismiss()
+
+    def complete_treasure_trade(self, resource_payments, credit_payment, popup):
+        # Check if player has enough credits
+        if credit_payment > self.character.money:
+            self.show_result("Not enough credits!")
+            return
+            
+        # Check if player has enough resources
+        for resource, amount, _ in resource_payments:
+            if self.character.resources[resource] < amount:
+                self.show_result(f"Not enough {resource}!")
+                return
+        
+        # Remove treasure from shop
+        self.character.shop_treasures.remove(self.current_treasure)
+        
+        # Process resource payments
+        for resource, amount, _ in resource_payments:
+            self.character.resources[resource] += amount
+            
+        # Process credit payment
+        self.character.money -= credit_payment
+        
+        popup.dismiss()
+        result_text = f"Trade completed! Sold {self.current_treasure.name} for:\n"
+        for resource, amount, _ in resource_payments:
+            result_text += f"• {amount} {resource}\n"
+        if credit_payment > 0:
+            result_text += f"• {credit_payment} credits"
+        self.show_result(result_text)
+
+    def show_regular_trade_offer(self, visitor_name, sell_resource, sell_amount, pay_resource, pay_amount):
+        content = BoxLayout(orientation='vertical', padding=10, spacing=10)
+        
+        # Calculate total value of the trade
+        total_value = sell_amount * self.character.resource_values[sell_resource]
+        
+        content.add_widget(Label(
+            text=f"{visitor_name} wants to buy {sell_amount} {sell_resource}\n"
+                 f"Total value: {total_value} credits\n"
+                 f"They offer: {pay_amount} {pay_resource} (worth {pay_amount * self.character.resource_values[pay_resource]} credits)"
+        ))
+        
+        # Add payment options
+        payment_layout = BoxLayout(orientation='vertical', spacing=5)
+        
+        # Option 1: Full resource payment
+        option1_btn = Button(
+            text=f"Accept {pay_amount} {pay_resource}",
+            size_hint_y=None,
+            height='40dp'
+        )
+        option1_btn.bind(on_release=lambda x: self.complete_mixed_trade(
+            sell_resource, sell_amount,
+            [(pay_resource, pay_amount, pay_amount * self.character.resource_values[pay_resource])],
+            0, trade_popup
+        ))
+        payment_layout.add_widget(option1_btn)
+        
+        # Option 2: Full credits payment
+        option2_btn = Button(
+            text=f"Accept {total_value} credits",
+            size_hint_y=None,
+            height='40dp'
+        )
+        option2_btn.bind(on_release=lambda x: self.complete_mixed_trade(
+            sell_resource, sell_amount, [], total_value, trade_popup
+        ))
+        payment_layout.add_widget(option2_btn)
+        
+        # Option 3: Mixed payment (half resources, half credits)
+        half_resource_amount = pay_amount // 2
+        half_credit_amount = total_value // 2
+        if half_resource_amount > 0:
+            option3_btn = Button(
+                text=f"Accept {half_resource_amount} {pay_resource} + {half_credit_amount} credits",
+                size_hint_y=None,
+                height='40dp'
+            )
+            option3_btn.bind(on_release=lambda x: self.complete_mixed_trade(
+                sell_resource, sell_amount,
+                [(pay_resource, half_resource_amount, half_resource_amount * self.character.resource_values[pay_resource])],
+                half_credit_amount, trade_popup
+            ))
+            payment_layout.add_widget(option3_btn)
+        
+        content.add_widget(payment_layout)
+        
+        # Decline button
+        decline_btn = Button(
+            text="Decline",
+            size_hint_y=None,
+            height='40dp'
+        )
+        decline_btn.bind(on_release=lambda x: trade_popup.dismiss())
+        content.add_widget(decline_btn)
+        
+        trade_popup = Popup(
+            title="Shop Visitor",
+            content=content,
+            size_hint=(0.8, 0.6),
+            auto_dismiss=False
+        )
+        trade_popup.open()
+
+    def complete_mixed_trade(self, sell_resource, sell_amount, resource_payments, credit_payment, popup):
+        # Check if player has enough credits
+        if credit_payment > self.character.money:
+            self.show_result("Not enough credits!")
+            return
+            
+        # Check if player has enough resources
+        for resource, amount, _ in resource_payments:
+            if self.character.resources[resource] < amount:
+                self.show_result(f"Not enough {resource}!")
+                return
+        
+        # Complete the trade
+        self.character.shop_inventory[sell_resource] -= sell_amount
+        
+        # Process resource payments
+        for resource, amount, _ in resource_payments:
+            self.character.resources[resource] += amount
+            
+        # Process credit payment
+        self.character.money -= credit_payment
+        
+        popup.dismiss()
+        result_text = f"Trade completed! Sold {sell_amount} {sell_resource} for:\n"
+        for resource, amount, _ in resource_payments:
+            result_text += f"• {amount} {resource}\n"
+        if credit_payment > 0:
+            result_text += f"• {credit_payment} credits"
+        self.show_result(result_text)
+
+    def get_valid_shop_trades(self):
+        valid_trades = []
+        for sell_resource, amount in self.character.shop_inventory.items():
+            if amount > 0:
+                for pay_resource, rate in self.character.shop_prices[sell_resource].items():
+                    sell_amount = min(random.randint(1, 3), amount)
+                    pay_amount = int(sell_amount * rate * random.uniform(1.0, 1.5))
+                    valid_trades.append((sell_resource, sell_amount, pay_resource, pay_amount))
+        return valid_trades
+
+    def show_result(self, text):
+        # Create a single BoxLayout to hold all content
+        content_layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
+        
+        # Add the message label
+        message_label = Label(text=text)
+        content_layout.add_widget(message_label)
+        
+        # Add the close button
+        close_btn = Button(
+            text="Close",
+            size_hint_y=None,
+            height='40dp'
+        )
+        content_layout.add_widget(close_btn)
+        
+        # Create the popup with the layout as its single content widget
+        result_popup = Popup(
+            title="Result",
+            content=content_layout,  # Use the layout as the single content widget
+            size_hint=(0.6, 0.4),
+            auto_dismiss=False
+        )
+        
+        # Bind the close button
+        close_btn.bind(on_release=result_popup.dismiss)
+        
+        # Open the popup
+        result_popup.open()
+
+    def close_all_popups(self):
+        # Add this method to the GameScreen class
+        for widget in Window.children[:]:
+            if isinstance(widget, Popup):
+                widget.dismiss()
+
 class CharacterStatusPopup(Popup):
     def __init__(self, character, **kwargs):
         super().__init__(**kwargs)
@@ -1431,6 +2294,7 @@ class CharacterStatusPopup(Popup):
         self.size_hint = (0.8, 0.8)
         self.auto_dismiss = False
         
+        # Create a single main layout
         layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
         
         # Create buttons for different sections
@@ -1467,12 +2331,26 @@ class CharacterStatusPopup(Popup):
         close_btn.bind(on_release=self.dismiss)
         layout.add_widget(close_btn)
         
+        # Set the main layout as the single content widget
         self.content = layout
 
     def show_stats(self, instance):
+        # Create a single layout for stats content
         content = BoxLayout(orientation='vertical', padding=10, spacing=10)
         
+        # Find character's class by comparing stats with presets
+        character_class = "Unknown"
+        for preset_name, preset in CHARACTER_PRESETS.items():
+            if (preset.endurance == self.character.endurance and
+                preset.scavenging == self.character.scavenging and
+                preset.charisma == self.character.charisma and
+                preset.combat == self.character.combat and
+                preset.crafting == self.character.crafting):
+                character_class = preset_name
+                break
+        
         stats_text = (
+            f"Character Class: {character_class}\n\n"
             "=== Core Stats ===\n"
             f"Endurance (END): {self.character.endurance}\n"
             f"Scavenging (SCV): {self.character.scavenging}\n"
@@ -1496,6 +2374,7 @@ class CharacterStatusPopup(Popup):
         )
         content.add_widget(close_btn)
         
+        # Create popup with the single content layout
         popup = Popup(
             title="Character Stats",
             content=content,
@@ -1506,6 +2385,7 @@ class CharacterStatusPopup(Popup):
         popup.open()
 
     def show_resources(self, instance):
+        # Create a single layout for resources content
         content = BoxLayout(orientation='vertical', padding=10, spacing=10)
         
         resources_text = (
@@ -1521,7 +2401,24 @@ class CharacterStatusPopup(Popup):
             for upgrade in self.character.base_upgrades:
                 resources_text += f"• {upgrade}\n"
         else:
-            resources_text += "No upgrades built yet"
+            resources_text += "No upgrades built yet\n"
+        
+        # Add treasures section
+        if hasattr(self.character, 'treasures') and self.character.treasures:
+            resources_text += "\n=== Personal Treasures ===\n"
+            for treasure in self.character.treasures:
+                resources_text += (f"• {treasure.name}\n"
+                                 f"  Value: {treasure.value}\n"
+                                 f"  Found: {treasure.location_found} (Day {treasure.day_found})\n"
+                                 f"  {treasure.description}\n")
+        
+        if hasattr(self.character, 'shop_treasures') and self.character.shop_treasures:
+            resources_text += "\n=== Shop Display Treasures ===\n"
+            for treasure in self.character.shop_treasures:
+                resources_text += (f"• {treasure.name}\n"
+                                 f"  Value: {treasure.value}\n"
+                                 f"  Found: {treasure.location_found} (Day {treasure.day_found})\n"
+                                 f"  {treasure.description}\n")
         
         content.add_widget(Label(text=resources_text))
         
@@ -1532,6 +2429,7 @@ class CharacterStatusPopup(Popup):
         )
         content.add_widget(close_btn)
         
+        # Create popup with the single content layout
         popup = Popup(
             title="Resources & Upgrades",
             content=content,
@@ -1542,6 +2440,7 @@ class CharacterStatusPopup(Popup):
         popup.open()
 
     def show_members(self, instance):
+        # Create a single layout for members content
         content = BoxLayout(orientation='vertical', padding=10, spacing=10)
         
         if not self.character.camp_members:
@@ -1563,6 +2462,7 @@ class CharacterStatusPopup(Popup):
         )
         content.add_widget(close_btn)
         
+        # Create popup with the single content layout
         popup = Popup(
             title="Camp Members",
             content=content,
@@ -1621,6 +2521,216 @@ class CreditsScreen(Screen):
         
         self.add_widget(layout)
 
+class ShopManagementPopup(Popup):
+    def __init__(self, character, **kwargs):
+        super().__init__(**kwargs)
+        self.character = character
+        self.title = "Shop Management"
+        self.size_hint = (0.9, 0.9)
+        self.auto_dismiss = False
+        self.setup_content()
+
+    def setup_content(self):
+        # Create a single main layout for the entire popup
+        main_layout = BoxLayout(orientation='vertical', spacing=10, padding=10)
+        
+        # Create ScrollView for the content
+        scroll_view = ScrollView()
+        content_layout = BoxLayout(orientation='vertical', spacing=10, size_hint_y=None)
+        content_layout.bind(minimum_height=content_layout.setter('height'))
+        
+        # Store these as instance variables so refresh_display can access them
+        self.content_layout = content_layout
+        self.main_layout = main_layout
+        
+        # Personal Storage Section
+        personal_layout = BoxLayout(orientation='vertical', size_hint_y=None, height=200)
+        personal_layout.add_widget(Label(text='Personal Storage', size_hint_y=None, height=30))
+        self.personal_display = Label(size_hint_y=None, height=170)
+        personal_layout.add_widget(self.personal_display)
+        content_layout.add_widget(personal_layout)
+
+        # Shop Counter Section
+        shop_layout = BoxLayout(orientation='vertical', size_hint_y=None, height=200)
+        shop_layout.add_widget(Label(text='Shop Counter', size_hint_y=None, height=30))
+        self.shop_display = Label(size_hint_y=None, height=170)
+        shop_layout.add_widget(self.shop_display)
+        content_layout.add_widget(shop_layout)
+
+        # Resource Management Section
+        manage_layout = GridLayout(cols=4, spacing=5, size_hint_y=None)
+        manage_layout.bind(minimum_height=manage_layout.setter('height'))
+        self.manage_layout = manage_layout
+        content_layout.add_widget(manage_layout)
+
+        # Treasure Management Section
+        treasure_layout = BoxLayout(orientation='vertical', size_hint_y=None)
+        treasure_layout.bind(minimum_height=treasure_layout.setter('height'))
+        
+        treasure_header = Label(
+            text='Treasure Management',
+            size_hint_y=None,
+            height=30,
+            bold=True
+        )
+        treasure_layout.add_widget(treasure_header)
+        
+        self.treasure_display = Label(size_hint_y=None)
+        self.treasure_display.bind(texture_size=lambda *x: setattr(self.treasure_display, 'height', self.treasure_display.texture_size[1]))
+        treasure_layout.add_widget(self.treasure_display)
+        
+        content_layout.add_widget(treasure_layout)
+        self.treasure_layout = treasure_layout
+
+        # Add close button
+        close_button = Button(
+            text='Close',
+            size_hint_y=None,
+            height=50
+        )
+        close_button.bind(on_release=self.dismiss)
+
+        # Add ScrollView and close button to main layout
+        scroll_view.add_widget(content_layout)
+        main_layout.add_widget(scroll_view)
+        main_layout.add_widget(close_button)
+
+        # Set the popup content
+        self.content = main_layout
+        
+        # Initial display refresh
+        self.refresh_display()
+
+    def refresh_display(self):
+        # Clear the management layout
+        self.manage_layout.clear_widgets()
+        
+        # Update personal storage display
+        personal_text = "Personal Storage:\n"
+        for resource, amount in self.character.resources.items():
+            personal_text += f"{resource.title()}: {amount}\n"
+        self.personal_display.text = personal_text
+
+        # Update shop counter display
+        shop_text = "Shop Counter:\n"
+        for resource, amount in self.character.shop_inventory.items():
+            shop_text += f"{resource.title()}: {amount}\n"
+        self.shop_display.text = shop_text
+
+        # Rebuild resource management buttons
+        for resource in self.character.resources.keys():
+            # Resource label
+            self.manage_layout.add_widget(Label(
+                text=resource.title(),
+                size_hint_y=None,
+                height=40
+            ))
+            
+            # Remove from shop button (now first)
+            remove_btn = Button(
+                text="-",
+                size_hint_y=None,
+                height=40,
+                background_color=(1, 0, 0, 1)  # Red
+            )
+            remove_btn.resource = resource
+            remove_btn.bind(on_release=self.remove_from_shop)
+            self.manage_layout.add_widget(remove_btn)
+            
+            # Add to shop button (now second)
+            add_btn = Button(
+                text="+",
+                size_hint_y=None,
+                height=40,
+                background_color=(0, 1, 0, 1)  # Green
+            )
+            add_btn.resource = resource
+            add_btn.bind(on_release=self.add_to_shop)
+            self.manage_layout.add_widget(add_btn)
+            
+            # Amount in shop label
+            self.manage_layout.add_widget(Label(
+                text=str(self.character.shop_inventory[resource]),
+                size_hint_y=None,
+                height=40
+            ))
+
+        # Check if there are any treasures to manage
+        has_personal_treasures = hasattr(self.character, 'treasures') and len(self.character.treasures) > 0
+        has_shop_treasures = hasattr(self.character, 'shop_treasures') and len(self.character.shop_treasures) > 0
+        
+        # Only show treasure section if there are treasures to manage
+        if has_personal_treasures or has_shop_treasures:
+            # Show treasure section header
+            self.treasure_layout.opacity = 1
+            self.treasure_layout.height = None  # Reset height to show content
+            
+            # Add treasure management buttons
+            if has_personal_treasures:
+                for treasure in self.character.treasures:
+                    add_btn = Button(
+                        text=f"Add {treasure.name} to Shop",
+                        size_hint_y=None,
+                        height=40,
+                        background_color=(0, 0, 1, 1)  # Blue
+                    )
+                    add_btn.treasure = treasure
+                    add_btn.bind(on_release=self.add_treasure_to_shop)
+                    self.manage_layout.add_widget(add_btn)
+
+            if has_shop_treasures:
+                for treasure in self.character.shop_treasures:
+                    remove_btn = Button(
+                        text=f"Return {treasure.name} to Inventory",
+                        size_hint_y=None,
+                        height=40,
+                        background_color=(1, 0.5, 0, 1)  # Orange
+                    )
+                    remove_btn.treasure = treasure
+                    remove_btn.bind(on_release=self.remove_treasure_from_shop)
+                    self.manage_layout.add_widget(remove_btn)
+        else:
+            # Hide treasure section completely
+            self.treasure_layout.opacity = 0
+            self.treasure_layout.height = 0
+
+    def add_to_shop(self, instance):
+        resource = instance.resource
+        if self.character.resources[resource] > 0:
+            self.character.resources[resource] -= 1
+            self.character.shop_inventory[resource] += 1
+            self.refresh_display()
+
+    def remove_from_shop(self, instance):
+        resource = instance.resource
+        if self.character.shop_inventory[resource] > 0:
+            self.character.shop_inventory[resource] -= 1
+            self.character.resources[resource] += 1
+            self.refresh_display()
+
+    def add_treasure_to_shop(self, instance):
+        treasure = instance.treasure
+        if treasure in self.character.treasures:
+            self.character.treasures.remove(treasure)
+            if not hasattr(self.character, 'shop_treasures'):
+                self.character.shop_treasures = []
+            self.character.shop_treasures.append(treasure)
+            self.refresh_display()
+
+    def remove_treasure_from_shop(self, instance):
+        treasure = instance.treasure
+        if treasure in self.character.shop_treasures:
+            self.character.shop_treasures.remove(treasure)
+            if not hasattr(self.character, 'treasures'):
+                self.character.treasures = []
+            self.character.treasures.append(treasure)
+            self.refresh_display()
+
+    def dismiss(self, *args):
+        game_screen = App.get_running_app().root.get_screen('game_screen')
+        game_screen.update_ui()
+        super().dismiss(*args)
+
 def save_character(character):
     Path("Characters").mkdir(exist_ok=True)
     character_data = {
@@ -1635,13 +2745,63 @@ def save_character(character):
         "camp_members": character.camp_members,
         "current_ap": character.current_ap,
         "current_day": character.current_day,
-        "objectives_completed": character.objectives_completed
+        "objectives_completed": character.objectives_completed,
+        "shop_inventory": character.shop_inventory,
+        "treasures": [
+            {
+                "name": t.name,
+                "category": t.category,
+                "value": t.value,
+                "location_found": t.location_found,
+                "description": t.description,
+                "day_found": t.day_found
+            } for t in (character.treasures if hasattr(character, 'treasures') else [])
+        ],
+        "shop_treasures": [
+            {
+                "name": t.name,
+                "category": t.category,
+                "value": t.value,
+                "location_found": t.location_found,
+                "description": t.description,
+                "day_found": t.day_found
+            } for t in (character.shop_treasures if hasattr(character, 'shop_treasures') else [])
+        ]
     }
     
     file_path = f"Characters/{character.name}.json"
     with open(file_path, 'w') as f:
         json.dump(character_data, f, indent=4)
     return True
+
+def check_random_trade(character):
+    if "Shop Counter" in character.base_upgrades and any(character.shop_inventory.values()):
+        if random.random() < 0.3:  # 30% chance for trade opportunity
+            return generate_trade_offer(character)
+    return None
+
+def generate_trade_offer(character):
+    # Only consider resources that are in the shop
+    available_resources = [r for r, amt in character.shop_inventory.items() if amt > 0]
+    if not available_resources:
+        return None
+        
+    selling_resource = random.choice(available_resources)
+    selling_amount = min(random.randint(1, 3), character.shop_inventory[selling_resource])
+    
+    # Calculate payment options based on shop_prices
+    payment_options = character.shop_prices[selling_resource]
+    payment_resource = random.choice(list(payment_options.keys()))
+    payment_amount = int(selling_amount * rate * random.uniform(1.0, 1.5))
+    
+    return {
+        'sell': (selling_resource, selling_amount),
+        'payment': (payment_resource, payment_amount)
+    }
+
+def sell_treasure(self, treasure):
+    self.character.money += treasure.value
+    self.character.treasures.remove(treasure)
 
 class ZombieVibeApp(App):
     def build(self):
